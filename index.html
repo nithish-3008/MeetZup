@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MeetzUp</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/simple-peer/9.11.1/simplepeer.min.js"></script>
+    <style>
+        body {
+            background: #0d0d0d;
+            color: #fff;
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container {
+            text-align: center;
+            background: #1a1a1a;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.2);
+            animation: fadeIn 1s ease-in-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        video {
+            width: 100%;
+            max-width: 400px;
+            border: 3px solid #ffcc00;
+            border-radius: 10px;
+        }
+        button {
+            background: #ffcc00;
+            border: none;
+            padding: 10px 20px;
+            margin: 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        button:hover {
+            background: #ff9900;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>MeetzUp ⚡</h1>
+        <video id="localVideo" autoplay playsinline></video>
+        <video id="remoteVideo" autoplay playsinline></video>
+        <br>
+        <button onclick="switchCamera()">Switch Camera</button>
+        <button onclick="startChat()">Start Chat</button>
+    </div>
+
+    <script>
+        let currentStream;
+        let useFrontCamera = true;
+        let peer;
+        const socket = new WebSocket("https://70d7e61c-562b-4a19-a2b9-374eaa7fae52-00-2i85hc9lspp6u.pike.replit.dev/");
+
+        socket.onopen = () => console.log("Connected to WebSocket signaling server");
+        socket.onclose = () => console.log("Disconnected from WebSocket server");
+
+        async function startCamera() {
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+            }
+            try {
+                currentStream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: useFrontCamera ? "user" : "environment" }
+                });
+                document.getElementById("localVideo").srcObject = currentStream;
+            } catch (error) {
+                console.error("Error accessing camera:", error);
+            }
+        }
+
+        function switchCamera() {
+            useFrontCamera = !useFrontCamera;
+            startCamera();
+        }
+
+        function startChat() {
+            socket.send(JSON.stringify({ type: "find_match" })); // Request pairing
+        }
+
+        socket.onmessage = event => {
+            const message = JSON.parse(event.data);
+
+            if (message.type === "match") {
+                peer = new SimplePeer({ 
+                    initiator: message.initiator, 
+                    trickle: false, 
+                    stream: currentStream 
+                });
+
+                peer.on("signal", data => {
+                    socket.send(JSON.stringify({ type: "signal", data }));
+                });
+
+                peer.on("stream", stream => {
+                    document.getElementById("remoteVideo").srcObject = stream;
+                });
+
+                peer.on("error", err => console.error("Peer connection error:", err));
+            } 
+            else if (message.type === "signal" && peer) {
+                peer.signal(message.data);
+            }
+        };
+
+        startCamera();
+    </script>
+</body>
+</html>
