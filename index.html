@@ -52,18 +52,20 @@
         <br>
         <button onclick="switchCamera()">Switch Camera</button>
         <button onclick="startChat()">Start Chat</button>
+        <button onclick="nextPeer()">Next</button>
     </div>
 
     <script>
         let currentStream;
         let useFrontCamera = true;
         let peer;
+        let previousPeers = [];
+        let matchedPeers = new Set();
         
-        // Use 'ws://' for localhost, 'wss://' for deployed server
         const signalingServerUrl = "wss://meetzup-signaling.onrender.com"; 
         const socket = new WebSocket(signalingServerUrl);
 
-        socket.onopen = () => console.log("✅ Connected to WebSocket signaling server");
+        socket.onopen = () => console.log("✅ Connected to WebSocket server");
         socket.onclose = () => console.log("⚠️ Disconnected from WebSocket server");
         socket.onerror = (err) => console.error("🚨 WebSocket Error:", err);
 
@@ -77,6 +79,14 @@
                     audio: true 
                 });
                 document.getElementById("localVideo").srcObject = currentStream;
+
+                // Update the stream for the current peer
+                if (peer && peer.streams.length > 0) {
+                    let videoTrack = currentStream.getVideoTracks()[0];
+                    let sender = peer._pc.getSenders().find(s => s.track.kind === "video");
+                    if (sender) sender.replaceTrack(videoTrack);
+                }
+
             } catch (error) {
                 console.error("🚨 Error accessing camera:", error);
             }
@@ -92,13 +102,29 @@
             socket.send(JSON.stringify({ type: "find_match" })); // Request pairing
         }
 
+        function nextPeer() {
+            if (peer) {
+                peer.destroy();  // Close current connection
+            }
+            console.log("🔁 Switching to next peer...");
+            startChat();  // Search for a new match
+        }
+
         socket.onmessage = (event) => {
             const message = JSON.parse(event.data);
-            console.log("📩 Received message from server:", message);
+            console.log("📩 Received message:", message);
 
             if (message.type === "match") {
-                console.log("🔗 Matched! Initiator:", message.initiator);
+                if (previousPeers.includes(message.peerId) && Math.random() > 0.3) {
+                    console.log("🔀 Skipping previous peer, finding another...");
+                    startChat();
+                    return;
+                }
+                
+                previousPeers.push(message.peerId);
+                matchedPeers.add(message.peerId);
 
+                console.log("🔗 Matched! Initiator:", message.initiator);
                 peer = new SimplePeer({ 
                     initiator: message.initiator, 
                     trickle: false, 
