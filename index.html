@@ -47,7 +47,7 @@
 <body>
     <div class="container">
         <h1>MeetzUp ⚡</h1>
-        <video id="localVideo" autoplay playsinline></video>
+        <video id="localVideo" autoplay playsinline muted></video>
         <video id="remoteVideo" autoplay playsinline></video>
         <br>
         <button onclick="switchCamera()">Switch Camera</button>
@@ -59,15 +59,37 @@
         let currentStream;
         let useFrontCamera = true;
         let peer;
-        let previousPeers = [];
+        let socket;
         let matchedPeers = new Set();
-        
-        const signalingServerUrl = "wss://meetzup-signaling.onrender.com"; 
-        const socket = new WebSocket(signalingServerUrl);
 
-        socket.onopen = () => console.log("✅ Connected to WebSocket server");
-        socket.onclose = () => console.log("⚠️ Disconnected from WebSocket server");
-        socket.onerror = (err) => console.error("🚨 WebSocket Error:", err);
+        const signalingServerUrl = "wss://meetzup-signaling.onrender.com";
+
+        function initializeSocket() {
+            socket = new WebSocket(signalingServerUrl);
+
+            socket.onopen = () => console.log("✅ Connected to WebSocket server");
+            socket.onclose = () => console.log("⚠️ Disconnected from WebSocket server");
+            socket.onerror = (err) => console.error("🚨 WebSocket Error:", err);
+
+            socket.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                console.log("📩 Received message:", message);
+
+                if (message.type === "match") {
+                    matchedPeers.add(message.peerId);
+                    setupPeerConnection(message.initiator);
+                } 
+                else if (message.type === "signal" && peer) {
+                    console.log("🔁 Received signal, connecting...");
+                    peer.signal(message.data);
+                } 
+                else if (message.type === "partner-disconnected") {
+                    console.log("❌ Partner disconnected, looking for a new match...");
+                    resetConnection();
+                    startChat();
+                }
+            };
+        }
 
         async function startCamera() {
             if (currentStream) {
@@ -80,13 +102,11 @@
                 });
                 document.getElementById("localVideo").srcObject = currentStream;
 
-                // Update the stream for the current peer
-                if (peer && peer.streams.length > 0) {
-                    let videoTrack = currentStream.getVideoTracks()[0];
-                    let sender = peer._pc.getSenders().find(s => s.track.kind === "video");
-                    if (sender) sender.replaceTrack(videoTrack);
+                // If already in a call, replace the video track
+                if (peer) {
+                    const sender = peer._pc.getSenders().find(s => s.track && s.track.kind === "video");
+                    if (sender) sender.replaceTrack(currentStream.getVideoTracks()[0]);
                 }
-
             } catch (error) {
                 console.error("🚨 Error accessing camera:", error);
             }
@@ -97,63 +117,62 @@
             startCamera();
         }
 
+        function setupPeerConnection(isInitiator) {
+            console.log("🔗 Matched! Initiator:", isInitiator);
+            
+            if (peer) {
+                peer.destroy(); // Close existing peer before creating a new one
+            }
+
+            peer = new SimplePeer({ 
+                initiator: isInitiator, 
+                trickle: false, 
+                stream: currentStream 
+            });
+
+            peer.on("signal", data => {
+                console.log("📡 Sending signal...");
+                socket.send(JSON.stringify({ type: "signal", data }));
+            });
+
+            peer.on("stream", stream => {
+                console.log("📺 Receiving remote video stream");
+                document.getElementById("remoteVideo").srcObject = stream;
+            });
+
+            peer.on("error", err => console.error("🚨 Peer connection error:", err));
+            
+            peer.on("close", () => {
+                console.log("❌ Peer connection closed");
+                resetConnection();
+                startChat();
+            });
+        }
+
         function startChat() {
             console.log("🔄 Looking for a match...");
             socket.send(JSON.stringify({ type: "find_match" })); // Request pairing
         }
 
         function nextPeer() {
-            if (peer) {
-                peer.destroy();  // Close current connection
-            }
             console.log("🔁 Switching to next peer...");
-            startChat();  // Search for a new match
+            if (peer) {
+                peer.destroy(); // Close existing peer connection
+                resetConnection();
+            }
+            startChat();
         }
 
-        socket.onmessage = (event) => {
-            const message = JSON.parse(event.data);
-            console.log("📩 Received message:", message);
-
-            if (message.type === "match") {
-                if (previousPeers.includes(message.peerId) && Math.random() > 0.3) {
-                    console.log("🔀 Skipping previous peer, finding another...");
-                    startChat();
-                    return;
-                }
-                
-                previousPeers.push(message.peerId);
-                matchedPeers.add(message.peerId);
-
-                console.log("🔗 Matched! Initiator:", message.initiator);
-                peer = new SimplePeer({ 
-                    initiator: message.initiator, 
-                    trickle: false, 
-                    stream: currentStream 
-                });
-
-                peer.on("signal", data => {
-                    console.log("📡 Sending signal...");
-                    socket.send(JSON.stringify({ type: "signal", data }));
-                });
-
-                peer.on("stream", stream => {
-                    console.log("📺 Receiving remote video stream");
-                    document.getElementById("remoteVideo").srcObject = stream;
-                });
-
-                peer.on("error", err => console.error("🚨 Peer connection error:", err));
-            } 
-            else if (message.type === "signal") {
-                if (peer) {
-                    console.log("🔁 Received signal, connecting...");
-                    peer.signal(message.data);
-                } else {
-                    console.error("⚠️ Peer is undefined when trying to signal");
-                }
+        function resetConnection() {
+            if (peer) {
+                peer.destroy();
+                peer = null;
             }
-        };
+            document.getElementById("remoteVideo").srcObject = null;
+        }
 
         startCamera();
+        initializeSocket();
     </script>
 </body>
 </html>

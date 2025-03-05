@@ -16,6 +16,16 @@ function sendMessage(socket, message) {
     }
 }
 
+// Function to unpair users
+function unpairUser(socket) {
+    if (socket.partner) {
+        sendMessage(socket.partner, { type: "partner-disconnected" });
+        socket.partner.partner = null;
+        socket.partner = null;
+    }
+}
+
+// WebSocket connection logic
 wss.on("connection", (socket) => {
     console.log("✅ New user connected");
 
@@ -23,10 +33,10 @@ wss.on("connection", (socket) => {
     socket.isAlive = true;
     socket.on("pong", () => (socket.isAlive = true));
 
+    // Match users
     if (!waitingUser) {
         waitingUser = socket;
     } else {
-        // Pair the waiting user with the new user
         const partner = waitingUser;
         waitingUser = null;
 
@@ -41,20 +51,35 @@ wss.on("connection", (socket) => {
 
     // Handle messages between peers
     socket.on("message", (message) => {
-        if (socket.partner) {
-            sendMessage(socket.partner, JSON.parse(message));
+        try {
+            const msg = JSON.parse(message);
+            
+            if (msg.type === "next") {
+                console.log("🔄 User requested next match");
+                unpairUser(socket);
+                if (!waitingUser) {
+                    waitingUser = socket;
+                } else {
+                    const partner = waitingUser;
+                    waitingUser = null;
+                    socket.partner = partner;
+                    partner.partner = socket;
+                    sendMessage(partner, { type: "match", initiator: true });
+                    sendMessage(socket, { type: "match", initiator: false });
+                    console.log("🔗 Users paired after next");
+                }
+            } else if (socket.partner) {
+                sendMessage(socket.partner, msg);
+            }
+        } catch (err) {
+            console.error("❌ Error processing message:", err);
         }
     });
 
     // Handle disconnection
     socket.on("close", () => {
         console.log("❌ User disconnected");
-
-        if (socket.partner) {
-            sendMessage(socket.partner, { type: "partner-disconnected" });
-            socket.partner.partner = null;
-        }
-
+        unpairUser(socket);
         if (waitingUser === socket) {
             waitingUser = null;
         }
