@@ -61,6 +61,7 @@
         let peer;
         let socket;
         let matchedPeers = new Set();
+        let isFindingNewPeer = false;
 
         const signalingServerUrl = "wss://meetzup-signaling.onrender.com";
 
@@ -68,7 +69,10 @@
             socket = new WebSocket(signalingServerUrl);
 
             socket.onopen = () => console.log("✅ Connected to WebSocket server");
-            socket.onclose = () => console.log("⚠️ Disconnected from WebSocket server");
+            socket.onclose = () => {
+                console.log("⚠️ Disconnected from WebSocket server, retrying...");
+                setTimeout(initializeSocket, 2000); // Auto-reconnect
+            };
             socket.onerror = (err) => console.error("🚨 WebSocket Error:", err);
 
             socket.onmessage = (event) => {
@@ -84,9 +88,9 @@
                     peer.signal(message.data);
                 } 
                 else if (message.type === "partner-disconnected") {
-                    console.log("❌ Partner disconnected, looking for a new match...");
+                    console.log("❌ Partner disconnected, searching for a new one...");
                     resetConnection();
-                    startChat();
+                    findNewPeer(); // Auto-search for new peer
                 }
             };
         }
@@ -102,7 +106,6 @@
                 });
                 document.getElementById("localVideo").srcObject = currentStream;
 
-                // If already in a call, replace the video track
                 if (peer) {
                     const sender = peer._pc.getSenders().find(s => s.track && s.track.kind === "video");
                     if (sender) sender.replaceTrack(currentStream.getVideoTracks()[0]);
@@ -121,7 +124,7 @@
             console.log("🔗 Matched! Initiator:", isInitiator);
             
             if (peer) {
-                peer.destroy(); // Close existing peer before creating a new one
+                peer.destroy();
             }
 
             peer = new SimplePeer({ 
@@ -141,26 +144,25 @@
             });
 
             peer.on("error", err => console.error("🚨 Peer connection error:", err));
-            
+
             peer.on("close", () => {
                 console.log("❌ Peer connection closed");
                 resetConnection();
-                startChat();
+                findNewPeer(); // Auto-search for next peer
             });
+
+            isFindingNewPeer = false; // Reset flag after finding a match
         }
 
         function startChat() {
             console.log("🔄 Looking for a match...");
-            socket.send(JSON.stringify({ type: "find_match" })); // Request pairing
+            findNewPeer();
         }
 
         function nextPeer() {
             console.log("🔁 Switching to next peer...");
-            if (peer) {
-                peer.destroy(); // Close existing peer connection
-                resetConnection();
-            }
-            startChat();
+            resetConnection();
+            findNewPeer();
         }
 
         function resetConnection() {
@@ -169,6 +171,14 @@
                 peer = null;
             }
             document.getElementById("remoteVideo").srcObject = null;
+        }
+
+        function findNewPeer() {
+            if (isFindingNewPeer) return; // Prevent duplicate match requests
+
+            console.log("🔍 Searching for a new peer...");
+            isFindingNewPeer = true;
+            socket.send(JSON.stringify({ type: "find_match" }));
         }
 
         startCamera();
